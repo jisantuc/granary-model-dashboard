@@ -12,9 +12,9 @@ import Uuid as Uuid
 
 ---- MODEL ----
 -- gameplan:
--- - [ ] make a request to list models
--- - [ ] decode those models into the model type
--- - [ ] show a table full of models
+-- - [x] make a request to list models
+-- - [x] decode those models into the model type
+-- - [ ] show a table full of models with elm-ui
 -- - [ ] when a model row is clicked, go to a detail page
 -- - [ ] on the detail page, make a request for predictions
 -- - [ ] decode those predictions into the prediction type
@@ -26,7 +26,7 @@ import Uuid as Uuid
 
 
 type alias Model =
-    {}
+    List GranaryModel
 
 
 type alias GranaryModel =
@@ -51,9 +51,9 @@ decoderGranaryModel =
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( {}
+    ( []
     , Http.get
-        { url = "http://localhost:3000/api/models"
+        { url = "http://localhost:8080/api/models"
         , expect = Http.expectJson GotModels (JD.list decoderGranaryModel)
         }
     )
@@ -70,7 +70,15 @@ type Msg
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
-    ( model, Cmd.none )
+    case msg of
+        NoOp ->
+            ( model, Cmd.none )
+
+        GotModels (Ok models) ->
+            ( models, Cmd.none )
+
+        GotModels (Err _) ->
+            ( model, Cmd.none )
 
 
 
@@ -80,9 +88,13 @@ update msg model =
 view : Model -> Html Msg
 view model =
     div []
-        [ img [ src "/logo.svg" ] []
-        , h1 [] [ text "Your Elm App is working!" ]
-        ]
+        ([ img [ src "/logo.svg" ] []
+         , div [] [ text "Your models" ]
+         ]
+            ++ List.map
+                (\mod -> div [] [ text mod.name ])
+                model
+        )
 
 
 
