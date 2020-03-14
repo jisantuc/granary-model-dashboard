@@ -13,7 +13,8 @@
             "elm/html": "1.0.0",
             "elm/http": "2.0.0",
             "elm/json": "1.1.2",
-            "lukewestby/elm-http-builder": "7.0.0"
+            "lukewestby/elm-http-builder": "7.0.0",
+            "mdgriffith/elm-ui": "1.1.5"
         },
         "indirect": {
             "NoRedInk/elm-json-decode-pipeline": "1.0.0",
