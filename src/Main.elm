@@ -1,14 +1,17 @@
 module Main exposing (main)
 
 import Browser
+import Browser.Navigation as Nav
 import Element
     exposing
-        ( Element
+        ( Attribute
+        , Element
         , column
         , el
         , fill
         , fillPortion
         , height
+        , link
         , padding
         , rgb255
         , row
@@ -19,10 +22,10 @@ import Element
 import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
-import Html exposing (Html)
 import Http
 import Json.Decode as JD
 import Json.Schema.Definitions as Schema
+import Url
 import Uuid as Uuid
 
 
@@ -66,8 +69,8 @@ decoderGranaryModel =
         (JD.field "jobQueue" JD.string)
 
 
-init : () -> ( Model, Cmd Msg )
-init _ =
+init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
+init _ _ _ =
     ( []
     , Http.get
         { url = "http://localhost:8080/api/models"
@@ -82,11 +85,15 @@ init _ =
 
 type Msg
     = GotModels (Result Http.Error (List GranaryModel))
+    | NoOp
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        NoOp ->
+            ( model, Cmd.none )
+
         GotModels (Ok models) ->
             ( models, Cmd.none )
 
@@ -118,18 +125,22 @@ mkRowElement s =
     el [ Font.size 16 ] (text s)
 
 
+modelLink : GranaryModel -> Element msg
+modelLink grModel =
+    link []
+        { url = "/" ++ (grModel.id |> Uuid.toString)
+        , label = mkRowElement grModel.name
+        }
+
+
 modelTable : Model -> Element Msg
 modelTable model =
-    Element.table [ padding 3, spacing 5 ]
+    Element.table [ padding 3, spacing 10 ]
         { data = model
         , columns =
-            [ { header = mkHeaderName "Model ID"
+            [ { header = mkHeaderName "Model name"
               , width = fill
-              , view = \granaryModel -> mkRowElement (Uuid.toString granaryModel.id)
-              }
-            , { header = mkHeaderName "Model name"
-              , width = fill
-              , view = \granaryModel -> mkRowElement granaryModel.name
+              , view = \granaryModel -> modelLink granaryModel
               }
             , { header = mkHeaderName "Job Definition"
               , width = fill
@@ -143,27 +154,31 @@ modelTable model =
         }
 
 
-view : Model -> Html Msg
+view : Model -> Browser.Document Msg
 view model =
-    Element.layout [] <|
-        column [ width fill ]
-            [ row
-                [ width fill
-                , height (fillPortion 1)
-                , padding 10
-                , Background.color (rgb255 0 255 255)
-                , Font.bold
-                , Font.italic
-                , Font.size 32
+    { title = "Available Models"
+    , body =
+        [ Element.layout [] <|
+            column [ width fill ]
+                [ row
+                    [ width fill
+                    , height (fillPortion 1)
+                    , padding 10
+                    , Background.color (rgb255 0 255 255)
+                    , Font.bold
+                    , Font.italic
+                    , Font.size 32
+                    ]
+                    [ text "Granary" ]
+                , row
+                    [ width fill
+                    , height fill
+                    , padding 10
+                    ]
+                    [ modelTable model ]
                 ]
-                [ text "Granary" ]
-            , row
-                [ width fill
-                , height fill
-                , padding 10
-                ]
-                [ modelTable model ]
-            ]
+        ]
+    }
 
 
 
@@ -172,9 +187,11 @@ view model =
 
 main : Program () Model Msg
 main =
-    Browser.element
+    Browser.application
         { view = view
         , init = init
         , update = update
         , subscriptions = always Sub.none
+        , onUrlRequest = \_ -> NoOp
+        , onUrlChange = \_ -> NoOp
         }
