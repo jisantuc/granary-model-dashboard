@@ -4,8 +4,7 @@ import Browser
 import Browser.Navigation as Nav
 import Element
     exposing
-        ( Attribute
-        , Element
+        ( Element
         , column
         , el
         , fill
@@ -35,7 +34,7 @@ import Uuid as Uuid
 -- - [x] make a request to list models
 -- - [x] decode those models into the model type
 -- - [x] show a table full of models with elm-ui
--- - [ ] when a model row is clicked, go to a detail page
+-- - [x] when a model row is clicked, go to a detail page
 -- - [ ] on the detail page, make a request for predictions
 -- - [ ] decode those predictions into the prediction type
 -- - [ ] show a "create prediction button"
@@ -46,7 +45,11 @@ import Uuid as Uuid
 
 
 type alias Model =
-    List GranaryModel
+    { url : Url.Url
+    , key : Nav.Key
+    , granaryModels : List GranaryModel
+    , granaryModelDetail : Maybe GranaryModel
+    }
 
 
 type alias GranaryModel =
@@ -70,8 +73,12 @@ decoderGranaryModel =
 
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
-init _ _ _ =
-    ( []
+init _ url key =
+    ( { url = url
+      , key = key
+      , granaryModels = []
+      , granaryModelDetail = Nothing
+      }
     , Http.get
         { url = "http://localhost:8080/api/models"
         , expect = Http.expectJson GotModels (JD.list decoderGranaryModel)
@@ -85,17 +92,48 @@ init _ _ _ =
 
 type Msg
     = GotModels (Result Http.Error (List GranaryModel))
-    | NoOp
+    | GotModel (Result Http.Error GranaryModel)
+    | Navigation Browser.UrlRequest
+    | UrlChanged Url.Url
+
+
+fetchModel : Uuid.Uuid -> Cmd.Cmd Msg
+fetchModel modelId =
+    Http.get
+        { url = "http://localhost:8080/api/models/" ++ Uuid.toString modelId
+        , expect = Http.expectJson GotModel decoderGranaryModel
+        }
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        NoOp ->
-            ( model, Cmd.none )
+        UrlChanged url ->
+            let
+                maybeModelId =
+                    String.dropLeft 1 url.path |> Uuid.fromString
+
+                cmd =
+                    Maybe.map fetchModel maybeModelId |> Maybe.withDefault Cmd.none
+            in
+            ( model, cmd )
+
+        Navigation urlRequest ->
+            case urlRequest of
+                Browser.Internal url ->
+                    ( model, Nav.pushUrl model.key (Url.toString url) )
+
+                Browser.External href ->
+                    ( model, Nav.load href )
+
+        GotModel (Ok granaryModel) ->
+            ( { model | granaryModels = [], granaryModelDetail = Just granaryModel }, Cmd.none )
+
+        GotModel (Err _) ->
+            ( model, Nav.pushUrl model.key "/" )
 
         GotModels (Ok models) ->
-            ( models, Cmd.none )
+            ( { model | granaryModels = models }, Cmd.none )
 
         GotModels (Err _) ->
             ( model, Cmd.none )
@@ -136,7 +174,7 @@ modelLink grModel =
 modelTable : Model -> Element Msg
 modelTable model =
     Element.table [ padding 3, spacing 10 ]
-        { data = model
+        { data = model.granaryModels
         , columns =
             [ { header = mkHeaderName "Model name"
               , width = fill
@@ -154,31 +192,43 @@ modelTable model =
         }
 
 
+
+-- key on url / key to figure out what to display, add a detail view for
+-- the `/model/id` case
+
+
 view : Model -> Browser.Document Msg
 view model =
-    { title = "Available Models"
-    , body =
-        [ Element.layout [] <|
-            column [ width fill ]
-                [ row
-                    [ width fill
-                    , height (fillPortion 1)
-                    , padding 10
-                    , Background.color (rgb255 0 255 255)
-                    , Font.bold
-                    , Font.italic
-                    , Font.size 32
-                    ]
-                    [ text "Granary" ]
-                , row
-                    [ width fill
-                    , height fill
-                    , padding 10
-                    ]
-                    [ modelTable model ]
+    case model.granaryModelDetail of
+        Just detail ->
+            { title = detail.name
+            , body = [ Element.layout [] (text "yup gonna have some stuff here soon") ]
+            }
+
+        Nothing ->
+            { title = "Available Models"
+            , body =
+                [ Element.layout [] <|
+                    column [ width fill ]
+                        [ row
+                            [ width fill
+                            , height (fillPortion 1)
+                            , padding 10
+                            , Background.color (rgb255 0 255 255)
+                            , Font.bold
+                            , Font.italic
+                            , Font.size 32
+                            ]
+                            [ text "Granary" ]
+                        , row
+                            [ width fill
+                            , height fill
+                            , padding 10
+                            ]
+                            [ modelTable model ]
+                        ]
                 ]
-        ]
-    }
+            }
 
 
 
@@ -192,6 +242,6 @@ main =
         , init = init
         , update = update
         , subscriptions = always Sub.none
-        , onUrlRequest = \_ -> NoOp
-        , onUrlChange = \_ -> NoOp
+        , onUrlRequest = Navigation
+        , onUrlChange = UrlChanged
         }
