@@ -35,6 +35,7 @@ import Uuid as Uuid
 -- - [x] decode those models into the model type
 -- - [x] show a table full of models with elm-ui
 -- - [x] when a model row is clicked, go to a detail page
+-- - [x] uncenter all the stuff?
 -- - [ ] on the detail page, make a request for predictions
 -- - [ ] decode those predictions into the prediction type
 -- - [ ] show a "create prediction button"
@@ -147,13 +148,13 @@ mkHeaderName : String -> Element msg
 mkHeaderName s =
     el
         [ Font.bold
+        , Font.size 24
         , Border.widthEach
             { bottom = 1
             , left = 0
             , right = 0
             , top = 0
             }
-        , Font.size 24
         ]
         (Element.text s)
 
@@ -173,7 +174,7 @@ modelLink grModel =
 
 modelTable : Model -> Element Msg
 modelTable model =
-    Element.table [ padding 3, spacing 10 ]
+    Element.table [ padding 3, spacing 10, Element.alignLeft ]
         { data = model.granaryModels
         , columns =
             [ { header = mkHeaderName "Model name"
