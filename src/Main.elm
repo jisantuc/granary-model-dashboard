@@ -21,9 +21,13 @@ import Element
 import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
+import Element.Input as Input
 import Http
+import Iso8601
 import Json.Decode as JD
+import Json.Decode.Extra as JDE
 import Json.Schema.Definitions as Schema
+import Time
 import Url
 import Uuid as Uuid
 
@@ -36,20 +40,28 @@ import Uuid as Uuid
 -- - [x] show a table full of models with elm-ui
 -- - [x] when a model row is clicked, go to a detail page
 -- - [x] uncenter all the stuff?
--- - [ ] on the detail page, make a request for predictions
--- - [ ] decode those predictions into the prediction type
--- - [ ] show a "create prediction button"
+-- - [x] on the detail page, make a request for predictions
+-- - [x] decode those predictions into the prediction type
+-- - [x] show a "create prediction button"
 -- - [ ] on click allow creating a json object
 -- - [ ] show the validation status of that json object the whole time
 -- - [ ] if it's valid for the model's arguments, submit a request and
 --       refresh the list of predictions
 
 
+type alias ModelDetail =
+    { predictions : List GranaryPrediction
+    , model : GranaryModel
+    , addingPrediction : Bool
+    , newPrediction : Maybe JD.Value
+    }
+
+
 type alias Model =
     { url : Url.Url
     , key : Nav.Key
     , granaryModels : List GranaryModel
-    , granaryModelDetail : Maybe GranaryModel
+    , modelDetail : Maybe ModelDetail
     }
 
 
@@ -59,6 +71,16 @@ type alias GranaryModel =
     , validator : Schema.Schema
     , jobDefinition : String
     , jobQueue : String
+    }
+
+
+type alias GranaryPrediction =
+    { id : Uuid.Uuid
+    , modelId : Uuid.Uuid
+    , invokedAt : Time.Posix
+    , statusReason : Maybe String
+    , outputLocation : Maybe String
+    , webhookId : Maybe Uuid.Uuid
     }
 
 
@@ -73,18 +95,56 @@ decoderGranaryModel =
         (JD.field "jobQueue" JD.string)
 
 
+decoderGranaryPrediction : JD.Decoder GranaryPrediction
+decoderGranaryPrediction =
+    JD.map6
+        GranaryPrediction
+        (JD.field "id" Uuid.decoder)
+        (JD.field "modelId" Uuid.decoder)
+        (JD.field "invokedAt" JDE.datetime)
+        (JD.field "statusReason" <| JD.maybe JD.string)
+        (JD.field "outputLocation" <| JD.maybe JD.string)
+        (JD.field "webhookId" <| JD.maybe Uuid.decoder)
+
+
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init _ url key =
     ( { url = url
       , key = key
       , granaryModels = []
-      , granaryModelDetail = Nothing
+      , modelDetail = Nothing
       }
     , Http.get
         { url = "http://localhost:8080/api/models"
         , expect = Http.expectJson GotModels (JD.list decoderGranaryModel)
         }
     )
+
+
+modelUrl : Uuid.Uuid -> String
+modelUrl =
+    (++) "http://localhost:8080/api/models/" << Uuid.toString
+
+
+predictionsUrl : Uuid.Uuid -> String
+predictionsUrl =
+    (++) "http://localhost:8080/api/predictions?modelId=" << Uuid.toString
+
+
+fetchModel : Uuid.Uuid -> Cmd.Cmd Msg
+fetchModel modelId =
+    Http.get
+        { url = modelUrl modelId
+        , expect = Http.expectJson GotModel decoderGranaryModel
+        }
+
+
+fetchPredictions : Uuid.Uuid -> Cmd.Cmd Msg
+fetchPredictions modelId =
+    Http.get
+        { url = predictionsUrl modelId
+        , expect = Http.expectJson GotPredictions (JD.list decoderGranaryPrediction)
+        }
 
 
 
@@ -94,16 +154,10 @@ init _ url key =
 type Msg
     = GotModels (Result Http.Error (List GranaryModel))
     | GotModel (Result Http.Error GranaryModel)
+    | GotPredictions (Result Http.Error (List GranaryPrediction))
+    | NewPrediction Uuid.Uuid Schema.Schema
     | Navigation Browser.UrlRequest
     | UrlChanged Url.Url
-
-
-fetchModel : Uuid.Uuid -> Cmd.Cmd Msg
-fetchModel modelId =
-    Http.get
-        { url = "http://localhost:8080/api/models/" ++ Uuid.toString modelId
-        , expect = Http.expectJson GotModel decoderGranaryModel
-        }
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -115,7 +169,8 @@ update msg model =
                     String.dropLeft 1 url.path |> Uuid.fromString
 
                 cmd =
-                    Maybe.map fetchModel maybeModelId |> Maybe.withDefault Cmd.none
+                    Maybe.map fetchModel maybeModelId
+                        |> Maybe.withDefault Cmd.none
             in
             ( model, cmd )
 
@@ -128,7 +183,12 @@ update msg model =
                     ( model, Nav.load href )
 
         GotModel (Ok granaryModel) ->
-            ( { model | granaryModels = [], granaryModelDetail = Just granaryModel }, Cmd.none )
+            ( { model
+                | granaryModels = []
+                , modelDetail = Just <| ModelDetail [] granaryModel False Nothing
+              }
+            , fetchPredictions granaryModel.id
+            )
 
         GotModel (Err _) ->
             ( model, Nav.pushUrl model.key "/" )
@@ -138,6 +198,29 @@ update msg model =
 
         GotModels (Err _) ->
             ( model, Cmd.none )
+
+        GotPredictions (Ok predictions) ->
+            let
+                baseModelDetail =
+                    model.modelDetail
+
+                updatedModelDetail =
+                    Maybe.map (\rec -> { rec | predictions = predictions }) baseModelDetail
+            in
+            ( { model | modelDetail = updatedModelDetail }, Cmd.none )
+
+        GotPredictions (Err _) ->
+            ( model, Cmd.none )
+
+        NewPrediction _ _ ->
+            let
+                baseModelDetail =
+                    model.modelDetail
+
+                updatedModelDetail =
+                    Maybe.map (\rec -> { rec | addingPrediction = True }) baseModelDetail
+            in
+            ( { model | modelDetail = updatedModelDetail }, Cmd.none )
 
 
 
@@ -172,6 +255,17 @@ modelLink grModel =
         }
 
 
+newPredictionButton : Uuid.Uuid -> Schema.Schema -> Element Msg
+newPredictionButton modelId modelSchema =
+    Input.button
+        [ Background.color <| rgb255 0 255 255
+        , Element.focused [ Background.color (rgb255 255 0 255) ]
+        ]
+        { onPress = Just (NewPrediction modelId modelSchema)
+        , label = Element.el [ Font.bold ] (text "New!")
+        }
+
+
 modelTable : Model -> Element Msg
 modelTable model =
     Element.table [ padding 3, spacing 10, Element.alignLeft ]
@@ -193,17 +287,117 @@ modelTable model =
         }
 
 
+predictionsTable : ModelDetail -> Element msg
+predictionsTable detail =
+    Element.table [ padding 3, spacing 10, Element.alignLeft ]
+        { data = detail.predictions
+        , columns =
+            [ { header = mkHeaderName "Invocation time"
+              , width = fill
+              , view =
+                    \prediction ->
+                        let
+                            invokedAt =
+                                prediction.invokedAt
+                        in
+                        text <| Iso8601.fromTime invokedAt
+              }
+            , { header = mkHeaderName "Status"
+              , width = fill
+              , view =
+                    \prediction ->
+                        Maybe.map (\_ -> "Failed") prediction.statusReason
+                            |> Maybe.withDefault "Succeeded"
+                            |> text
+              }
+            , { header = mkHeaderName "Results"
+              , width = fill
+              , view =
+                    \prediction ->
+                        Maybe.map
+                            (\uri ->
+                                link []
+                                    { url = uri
+                                    , label = text "Download"
+                                    }
+                            )
+                            prediction.outputLocation
+                            |> Maybe.withDefault (row [] [])
+              }
+            ]
+        }
 
--- key on url / key to figure out what to display, add a detail view for
--- the `/model/id` case
+
+titleBar : String -> Element msg
+titleBar s =
+    row
+        [ width fill
+        , height (fillPortion 1)
+        , padding 10
+        , Background.color (rgb255 0 255 255)
+        , Font.bold
+        , Font.italic
+        , Font.size 32
+        ]
+        [ text s ]
+
+
+boldKvPair : String -> String -> List (Element msg)
+boldKvPair s1 s2 =
+    [ Element.el
+        [ Font.bold
+        ]
+        (text s1)
+    , Element.el [] (text s2)
+    ]
+
+
+modelDetailColumn : List (Element msg) -> Element msg
+modelDetailColumn =
+    column [ height (fillPortion 2), width fill, Element.alignTop, padding 10, spacing 10 ]
 
 
 view : Model -> Browser.Document Msg
 view model =
-    case model.granaryModelDetail of
+    case model.modelDetail of
         Just detail ->
-            { title = detail.name
-            , body = [ Element.layout [] (text "yup gonna have some stuff here soon") ]
+            { title = detail.model.name
+            , body =
+                [ Element.layout [] <|
+                    column [ width fill ]
+                        [ titleBar detail.model.name
+                        , column [ height fill, width fill ]
+                            [ modelDetailColumn
+                                [ row [ Font.bold ]
+                                    [ Element.el
+                                        [ Border.widthEach
+                                            { bottom = 1
+                                            , left = 0
+                                            , right = 0
+                                            , top = 0
+                                            }
+                                        ]
+                                        (text "Model Details")
+                                    ]
+                                , row [] <| boldKvPair "Name: " detail.model.name
+                                , row [] <| boldKvPair "Model ID: " (Uuid.toString detail.model.id)
+                                , row [] <| boldKvPair "Job Definition: " detail.model.jobDefinition
+                                , row [] <| boldKvPair "Job Queue: " detail.model.jobQueue
+                                ]
+                            , modelDetailColumn <|
+                                if detail.addingPrediction then
+                                    [ text "sure man later" ]
+
+                                else
+                                    [ row [ Font.bold ]
+                                        [ text "Predictions: "
+                                        , newPredictionButton detail.model.id detail.model.validator
+                                        ]
+                                    , predictionsTable detail
+                                    ]
+                            ]
+                        ]
+                ]
             }
 
         Nothing ->
@@ -211,16 +405,7 @@ view model =
             , body =
                 [ Element.layout [] <|
                     column [ width fill ]
-                        [ row
-                            [ width fill
-                            , height (fillPortion 1)
-                            , padding 10
-                            , Background.color (rgb255 0 255 255)
-                            , Font.bold
-                            , Font.italic
-                            , Font.size 32
-                            ]
-                            [ text "Granary" ]
+                        [ titleBar "Granary"
                         , row
                             [ width fill
                             , height fill
