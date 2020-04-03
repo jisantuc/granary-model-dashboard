@@ -357,6 +357,40 @@ modelDetailColumn =
     column [ height (fillPortion 2), width fill, Element.alignTop, padding 10, spacing 10 ]
 
 
+granaryModelDetailPairs : ModelDetail -> List (Element msg)
+granaryModelDetailPairs detail =
+    [ row [ Font.bold ]
+        [ Element.el
+            [ Border.widthEach
+                { bottom = 1
+                , left = 0
+                , right = 0
+                , top = 0
+                }
+            ]
+            (text "Model Details")
+        ]
+    , row [] <| boldKvPair "Name: " detail.model.name
+    , row [] <| boldKvPair "Model ID: " (Uuid.toString detail.model.id)
+    , row [] <| boldKvPair "Job Definition: " detail.model.jobDefinition
+    , row [] <| boldKvPair "Job Queue: " detail.model.jobQueue
+    ]
+
+
+predictionsPane : ModelDetail -> List (Element Msg)
+predictionsPane detail =
+    if detail.addingPrediction then
+        [ text "sure man later" ]
+
+    else
+        [ row [ Font.bold ]
+            [ text "Predictions: "
+            , newPredictionButton detail.model.id detail.model.validator
+            ]
+        , predictionsTable detail
+        ]
+
+
 view : Model -> Browser.Document Msg
 view model =
     case model.modelDetail of
@@ -366,35 +400,9 @@ view model =
                 [ Element.layout [] <|
                     column [ width fill ]
                         [ titleBar detail.model.name
-                        , column [ height fill, width fill ]
-                            [ modelDetailColumn
-                                [ row [ Font.bold ]
-                                    [ Element.el
-                                        [ Border.widthEach
-                                            { bottom = 1
-                                            , left = 0
-                                            , right = 0
-                                            , top = 0
-                                            }
-                                        ]
-                                        (text "Model Details")
-                                    ]
-                                , row [] <| boldKvPair "Name: " detail.model.name
-                                , row [] <| boldKvPair "Model ID: " (Uuid.toString detail.model.id)
-                                , row [] <| boldKvPair "Job Definition: " detail.model.jobDefinition
-                                , row [] <| boldKvPair "Job Queue: " detail.model.jobQueue
-                                ]
-                            , modelDetailColumn <|
-                                if detail.addingPrediction then
-                                    [ text "sure man later" ]
-
-                                else
-                                    [ row [ Font.bold ]
-                                        [ text "Predictions: "
-                                        , newPredictionButton detail.model.id detail.model.validator
-                                        ]
-                                    , predictionsTable detail
-                                    ]
+                        , row [ height fill, width fill ]
+                            [ modelDetailColumn <| granaryModelDetailPairs detail
+                            , modelDetailColumn <| predictionsPane detail
                             ]
                         ]
                 ]
