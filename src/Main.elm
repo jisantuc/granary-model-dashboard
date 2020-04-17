@@ -26,7 +26,9 @@ import Http
 import Iso8601
 import Json.Decode as JD
 import Json.Decode.Extra as JDE
+import Json.Schema as Schema
 import Json.Schema.Definitions as Schema
+import Json.Schema.Validation as Validation
 import Time
 import Url
 import Uuid as Uuid
@@ -43,7 +45,7 @@ import Uuid as Uuid
 -- - [x] on the detail page, make a request for predictions
 -- - [x] decode those predictions into the prediction type
 -- - [x] show a "create prediction button"
--- - [ ] on click allow creating a json object
+-- - [x] on click allow creating a json object
 -- - [ ] show the validation status of that json object the whole time
 -- - [ ] if it's valid for the model's arguments, submit a request and
 --       refresh the list of predictions
@@ -53,7 +55,8 @@ type alias ModelDetail =
     { predictions : List GranaryPrediction
     , model : GranaryModel
     , addingPrediction : Bool
-    , newPrediction : Maybe JD.Value
+    , newPrediction : Result (List Validation.Error) JD.Value
+    , newPredictionRaw : String
     }
 
 
@@ -158,6 +161,7 @@ type Msg
     | NewPrediction Uuid.Uuid Schema.Schema
     | Navigation Browser.UrlRequest
     | UrlChanged Url.Url
+    | PredictionInput String
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -185,7 +189,7 @@ update msg model =
         GotModel (Ok granaryModel) ->
             ( { model
                 | granaryModels = []
-                , modelDetail = Just <| ModelDetail [] granaryModel False Nothing
+                , modelDetail = Just <| ModelDetail [] granaryModel False (Result.Err []) ""
               }
             , fetchPredictions granaryModel.id
             )
@@ -219,6 +223,37 @@ update msg model =
 
                 updatedModelDetail =
                     Maybe.map (\rec -> { rec | addingPrediction = True }) baseModelDetail
+            in
+            ( { model | modelDetail = updatedModelDetail }, Cmd.none )
+
+        PredictionInput s ->
+            let
+                baseModelDetail =
+                    model.modelDetail
+
+                valueDecodeResult =
+                    JD.decodeString JD.value s
+
+                maybePostBody =
+                    Result.toMaybe valueDecodeResult
+
+                updatedModelDetail =
+                    baseModelDetail
+                        |> Maybe.map
+                            (\rec ->
+                                { rec
+                                    | newPredictionRaw = s
+                                    , newPrediction =
+                                        maybePostBody
+                                            |> Maybe.map
+                                                (\value ->
+                                                    Schema.validateValue { applyDefaults = True }
+                                                        value
+                                                        rec.model.validator
+                                                )
+                                            |> Maybe.withDefault (Result.Err [])
+                                }
+                            )
             in
             ( { model | modelDetail = updatedModelDetail }, Cmd.none )
 
@@ -380,7 +415,15 @@ granaryModelDetailPairs detail =
 predictionsPane : ModelDetail -> List (Element Msg)
 predictionsPane detail =
     if detail.addingPrediction then
-        [ text "sure man later" ]
+        [ Input.multiline
+            []
+            { onChange = PredictionInput
+            , text = detail.newPredictionRaw
+            , placeholder = Nothing
+            , label = Input.labelAbove [] (text "Prediction input")
+            , spellcheck = True
+            }
+        ]
 
     else
         [ row [ Font.bold ]
