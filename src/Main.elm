@@ -22,7 +22,8 @@ import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
 import Element.Input as Input
-import Http
+import Http as Http
+import HttpBuilder as B
 import Iso8601
 import Json.Decode as JD
 import Json.Decode.Extra as JDE
@@ -45,8 +46,10 @@ import Uuid as Uuid
 -- - [x] on the detail page, make a request for predictions
 -- - [x] decode those predictions into the prediction type
 -- - [x] show a "create prediction button"
+-- - [ ] allow entering and storing a token to use for Granary requests
+-- - [ ] after storing that token, do all the stuff above
 -- - [x] on click allow creating a json object
--- - [ ] show the validation status of that json object the whole time
+-- - [x] show the validation status of that json object the whole time
 -- - [ ] if it's valid for the model's arguments, submit a request and
 --       refresh the list of predictions
 
@@ -60,11 +63,16 @@ type alias ModelDetail =
     }
 
 
+type alias GranaryToken =
+    String
+
+
 type alias Model =
     { url : Url.Url
     , key : Nav.Key
     , granaryModels : List GranaryModel
     , modelDetail : Maybe ModelDetail
+    , secrets : Maybe GranaryToken
     }
 
 
@@ -116,38 +124,51 @@ init _ url key =
       , key = key
       , granaryModels = []
       , modelDetail = Nothing
+      , secrets = Nothing
       }
-    , Http.get
-        { url = "http://localhost:8080/api/models"
-        , expect = Http.expectJson GotModels (JD.list decoderGranaryModel)
-        }
+    , B.get "https://granary.rasterfoundry.com/api/models"
+        |> B.withExpect (Http.expectJson GotModels (JD.list decoderGranaryModel))
+        |> B.withBearerToken "abcde"
+        |> B.request
     )
 
 
 modelUrl : Uuid.Uuid -> String
 modelUrl =
-    (++) "http://localhost:8080/api/models/" << Uuid.toString
+    (++) "https://granary.rasterfoundry.com/api/models/" << Uuid.toString
 
 
 predictionsUrl : Uuid.Uuid -> String
 predictionsUrl =
-    (++) "http://localhost:8080/api/predictions?modelId=" << Uuid.toString
+    (++) "https://granary.rasterfoundry.com/api/predictions?modelId=" << Uuid.toString
 
 
-fetchModel : Uuid.Uuid -> Cmd.Cmd Msg
-fetchModel modelId =
-    Http.get
-        { url = modelUrl modelId
-        , expect = Http.expectJson GotModel decoderGranaryModel
-        }
+fetchModel : Maybe GranaryToken -> Uuid.Uuid -> Cmd.Cmd Msg
+fetchModel token modelId =
+    token
+        |> Maybe.map
+            (\t ->
+                modelUrl modelId
+                    |> B.get
+                    |> B.withExpect (Http.expectJson GotModel decoderGranaryModel)
+                    |> B.withBearerToken t
+                    |> B.request
+            )
+        |> Maybe.withDefault Cmd.none
 
 
-fetchPredictions : Uuid.Uuid -> Cmd.Cmd Msg
-fetchPredictions modelId =
-    Http.get
-        { url = predictionsUrl modelId
-        , expect = Http.expectJson GotPredictions (JD.list decoderGranaryPrediction)
-        }
+fetchPredictions : Maybe GranaryToken -> Uuid.Uuid -> Cmd.Cmd Msg
+fetchPredictions token modelId =
+    token
+        |> Maybe.map
+            (\t ->
+                predictionsUrl modelId
+                    |> B.get
+                    |> B.withExpect (Http.expectJson GotPredictions (JD.list decoderGranaryPrediction))
+                    |> B.withBearerToken t
+                    |> B.request
+            )
+        |> Maybe.withDefault Cmd.none
 
 
 
@@ -173,7 +194,8 @@ update msg model =
                     String.dropLeft 1 url.path |> Uuid.fromString
 
                 cmd =
-                    Maybe.map fetchModel maybeModelId
+                    maybeModelId
+                        |> Maybe.map (fetchModel model.secrets)
                         |> Maybe.withDefault Cmd.none
             in
             ( model, cmd )
@@ -189,9 +211,9 @@ update msg model =
         GotModel (Ok granaryModel) ->
             ( { model
                 | granaryModels = []
-                , modelDetail = Just <| ModelDetail [] granaryModel False (Result.Err []) ""
+                , modelDetail = Just <| ModelDetail [] granaryModel False (Result.Err []) "{}"
               }
-            , fetchPredictions granaryModel.id
+            , fetchPredictions model.secrets granaryModel.id
             )
 
         GotModel (Err _) ->
@@ -233,9 +255,16 @@ update msg model =
 
                 valueDecodeResult =
                     JD.decodeString JD.value s
-
-                maybePostBody =
-                    Result.toMaybe valueDecodeResult
+                        |> Result.mapError
+                            (always
+                                [ { details = Validation.AlwaysFail
+                                  , jsonPointer =
+                                        { ns = ""
+                                        , path = []
+                                        }
+                                  }
+                                ]
+                            )
 
                 updatedModelDetail =
                     baseModelDetail
@@ -244,14 +273,13 @@ update msg model =
                                 { rec
                                     | newPredictionRaw = s
                                     , newPrediction =
-                                        maybePostBody
-                                            |> Maybe.map
+                                        valueDecodeResult
+                                            |> Result.andThen
                                                 (\value ->
                                                     Schema.validateValue { applyDefaults = True }
                                                         value
                                                         rec.model.validator
                                                 )
-                                            |> Maybe.withDefault (Result.Err [])
                                 }
                             )
             in
@@ -260,6 +288,16 @@ update msg model =
 
 
 ---- VIEW ----
+
+
+fontRed : Element.Attr d m
+fontRed =
+    rgb255 255 0 0 |> Font.color
+
+
+fontGreen : Element.Attr d m
+fontGreen =
+    rgb255 0 255 0 |> Font.color
 
 
 mkHeaderName : String -> Element msg
@@ -412,17 +450,78 @@ granaryModelDetailPairs detail =
     ]
 
 
+getErrField : Validation.Error -> String
+getErrField err =
+    case err.jsonPointer.path of
+        [] ->
+            "ROOT"
+
+        errs ->
+            List.intersperse "." errs
+                |> String.concat
+
+
+makeErr : Validation.Error -> List (Element Msg)
+makeErr err =
+    case err.details of
+        Validation.Required fields ->
+            fields
+                |> List.map (\s -> row [] [ text "Missing field: ", Element.el [ fontRed ] (text s) ])
+
+        Validation.AlwaysFail ->
+            [ row [] [ text "Invalid json" ] ]
+
+        Validation.InvalidType t ->
+            [ row []
+                [ column []
+                    [ row [] [ text (t ++ " in ") ]
+                    , row [] [ Element.el [ fontRed ] (getErrField err |> text) ]
+                    ]
+                ]
+            ]
+
+        Validation.RequiredProperty ->
+            []
+
+        _ ->
+            [ row []
+                [ text "I can't tell what else is wrong with "
+                , err.jsonPointer.path
+                    |> List.head
+                    |> Maybe.withDefault "ROOT"
+                    |> (Element.el [ fontRed ] << text)
+                ]
+            ]
+
+
+getErrorElem : Result (List Validation.Error) JD.Value -> String -> Element Msg
+getErrorElem result rawValue =
+    case ( result, rawValue ) of
+        ( _, "" ) ->
+            row [] [ text "Enter JSON for this model's schema" ]
+
+        -- should be a button, but _soon_
+        ( Result.Ok _, _ ) ->
+            row [] [ Element.el [ fontGreen ] (text "Ok!") ]
+
+        ( Err errs, _ ) ->
+            column [ spacing 3 ] (errs |> List.concatMap makeErr)
+
+
 predictionsPane : ModelDetail -> List (Element Msg)
 predictionsPane detail =
     if detail.addingPrediction then
-        [ Input.multiline
-            []
-            { onChange = PredictionInput
-            , text = detail.newPredictionRaw
-            , placeholder = Nothing
-            , label = Input.labelAbove [] (text "Prediction input")
-            , spellcheck = True
-            }
+        [ row []
+            [ Input.multiline
+                []
+                { onChange = PredictionInput
+                , text = detail.newPredictionRaw
+                , placeholder = Input.placeholder [] (text "{}") |> Just
+                , label = Input.labelAbove [] (text "Prediction input")
+                , spellcheck = True
+                }
+            ]
+        , getErrorElem detail.newPrediction detail.newPredictionRaw
         ]
 
     else
