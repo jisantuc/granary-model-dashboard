@@ -46,8 +46,8 @@ import Uuid as Uuid
 -- - [x] on the detail page, make a request for predictions
 -- - [x] decode those predictions into the prediction type
 -- - [x] show a "create prediction button"
--- - [ ] allow entering and storing a token to use for Granary requests
--- - [ ] after storing that token, do all the stuff above
+-- - [x] allow entering and storing a token to use for Granary requests
+-- - [x] after storing that token, do all the stuff above
 -- - [x] on click allow creating a json object
 -- - [x] show the validation status of that json object the whole time
 -- - [ ] if it's valid for the model's arguments, submit a request and
@@ -73,6 +73,7 @@ type alias Model =
     , granaryModels : List GranaryModel
     , modelDetail : Maybe ModelDetail
     , secrets : Maybe GranaryToken
+    , secretsUnsubmitted : Maybe GranaryToken
     }
 
 
@@ -125,11 +126,9 @@ init _ url key =
       , granaryModels = []
       , modelDetail = Nothing
       , secrets = Nothing
+      , secretsUnsubmitted = Nothing
       }
-    , B.get "https://granary.rasterfoundry.com/api/models"
-        |> B.withExpect (Http.expectJson GotModels (JD.list decoderGranaryModel))
-        |> B.withBearerToken "abcde"
-        |> B.request
+    , Cmd.none
     )
 
 
@@ -141,6 +140,19 @@ modelUrl =
 predictionsUrl : Uuid.Uuid -> String
 predictionsUrl =
     (++) "https://granary.rasterfoundry.com/api/predictions?modelId=" << Uuid.toString
+
+
+fetchModels : Maybe GranaryToken -> Cmd.Cmd Msg
+fetchModels token =
+    token
+        |> Maybe.map
+            (\t ->
+                B.get "https://granary.rasterfoundry.com/api/models"
+                    |> B.withExpect (Http.expectJson GotModels (JD.list decoderGranaryModel))
+                    |> B.withBearerToken t
+                    |> B.request
+            )
+        |> Maybe.withDefault Cmd.none
 
 
 fetchModel : Maybe GranaryToken -> Uuid.Uuid -> Cmd.Cmd Msg
@@ -183,6 +195,8 @@ type Msg
     | Navigation Browser.UrlRequest
     | UrlChanged Url.Url
     | PredictionInput String
+    | TokenInput String
+    | TokenSubmit
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -284,6 +298,14 @@ update msg model =
                             )
             in
             ( { model | modelDetail = updatedModelDetail }, Cmd.none )
+
+        TokenInput s ->
+            ( { model | secretsUnsubmitted = Just s }, Cmd.none )
+
+        TokenSubmit ->
+            ( { model | secrets = model.secretsUnsubmitted, secretsUnsubmitted = Nothing }
+            , fetchModels model.secretsUnsubmitted
+            )
 
 
 
@@ -535,8 +557,8 @@ predictionsPane detail =
 
 view : Model -> Browser.Document Msg
 view model =
-    case model.modelDetail of
-        Just detail ->
+    case ( model.secrets, model.modelDetail ) of
+        ( Just _, Just detail ) ->
             { title = detail.model.name
             , body =
                 [ Element.layout [] <|
@@ -550,7 +572,7 @@ view model =
                 ]
             }
 
-        Nothing ->
+        ( Just _, Nothing ) ->
             { title = "Available Models"
             , body =
                 [ Element.layout [] <|
@@ -562,6 +584,36 @@ view model =
                             , padding 10
                             ]
                             [ modelTable model ]
+                        ]
+                ]
+            }
+
+        ( Nothing, _ ) ->
+            { title = "Granary Model Dashboard"
+            , body =
+                [ Element.layout [] <|
+                    column [ spacing 3, Element.centerX, Element.centerY, width Element.shrink ]
+                        [ titleBar "Granary"
+                        , row [ width fill ]
+                            [ Input.text []
+                                { onChange = TokenInput
+                                , text = model.secretsUnsubmitted |> Maybe.withDefault ""
+                                , placeholder = Input.placeholder [] (text "Enter a token") |> Just
+                                , label = Input.labelHidden "Token input"
+                                }
+                            ]
+                        , row [ width fill ]
+                            [ Input.button
+                                [ Element.centerX
+                                , Background.color (rgb255 0 255 255)
+                                , Border.solid
+                                , Border.color (rgb255 0 0 0)
+                                , Border.width 2
+                                ]
+                                { onPress = Just TokenSubmit
+                                , label = text "Submit"
+                                }
+                            ]
                         ]
                 ]
             }
