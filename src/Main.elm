@@ -27,31 +27,13 @@ import HttpBuilder as B
 import Iso8601
 import Json.Decode as JD
 import Json.Decode.Extra as JDE
+import Json.Encode as JE
 import Json.Schema as Schema
 import Json.Schema.Definitions as Schema
 import Json.Schema.Validation as Validation
 import Time
 import Url
 import Uuid as Uuid
-
-
-
----- MODEL ----
--- gameplan:
--- - [x] make a request to list models
--- - [x] decode those models into the model type
--- - [x] show a table full of models with elm-ui
--- - [x] when a model row is clicked, go to a detail page
--- - [x] uncenter all the stuff?
--- - [x] on the detail page, make a request for predictions
--- - [x] decode those predictions into the prediction type
--- - [x] show a "create prediction button"
--- - [x] allow entering and storing a token to use for Granary requests
--- - [x] after storing that token, do all the stuff above
--- - [x] on click allow creating a json object
--- - [x] show the validation status of that json object the whole time
--- - [ ] if it's valid for the model's arguments, submit a request and
---       refresh the list of predictions
 
 
 type alias ModelDetail =
@@ -96,6 +78,20 @@ type alias GranaryPrediction =
     }
 
 
+type alias PredictionCreate =
+    { modelId : Uuid.Uuid
+    , arguments : JD.Value
+    }
+
+
+encodePredictionCreate : PredictionCreate -> JE.Value
+encodePredictionCreate predCreate =
+    JE.object
+        [ ( "modelId", Uuid.encode predCreate.modelId )
+        , ( "arguments", predCreate.arguments )
+        ]
+
+
 decoderGranaryModel : JD.Decoder GranaryModel
 decoderGranaryModel =
     JD.map5
@@ -130,6 +126,16 @@ init _ url key =
       }
     , Cmd.none
     )
+
+
+
+---- UPDATE ----
+
+
+getPredictionCreate : ModelDetail -> Maybe PredictionCreate
+getPredictionCreate detail =
+    (Result.toMaybe << .newPrediction) detail
+        |> Maybe.map (PredictionCreate detail.model.id)
 
 
 modelUrl : Uuid.Uuid -> String
@@ -183,8 +189,25 @@ fetchPredictions token modelId =
         |> Maybe.withDefault Cmd.none
 
 
+postPrediction : GranaryToken -> PredictionCreate -> Cmd.Cmd Msg
+postPrediction token predictionCreate =
+    B.post "https://granary.rasterfoundry.com/api/predictions"
+        |> B.withJsonBody (encodePredictionCreate predictionCreate)
+        |> B.withBearerToken token
+        |> B.withExpect (Http.expectJson CreatedPrediction decoderGranaryPrediction)
+        |> B.request
 
----- UPDATE ----
+
+maybePostPrediction : Maybe GranaryToken -> Maybe ModelDetail -> Cmd.Cmd Msg
+maybePostPrediction tokenM detailM =
+    case ( tokenM, detailM ) of
+        ( Just token, Just detail ) ->
+            getPredictionCreate detail
+                |> Maybe.map (postPrediction token)
+                |> Maybe.withDefault Cmd.none
+
+        _ ->
+            Cmd.none
 
 
 type Msg
@@ -197,6 +220,8 @@ type Msg
     | PredictionInput String
     | TokenInput String
     | TokenSubmit
+    | PredictionSubmit
+    | CreatedPrediction (Result Http.Error GranaryPrediction)
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -307,6 +332,23 @@ update msg model =
             , fetchModels model.secretsUnsubmitted
             )
 
+        CreatedPrediction (Ok _) ->
+            ( model
+            , Nav.pushUrl model.key
+                ("/"
+                    ++ (model.modelDetail
+                            |> Maybe.map (Uuid.toString << .id << .model)
+                            |> Maybe.withDefault ""
+                       )
+                )
+            )
+
+        CreatedPrediction _ ->
+            ( model, Cmd.none )
+
+        PredictionSubmit ->
+            ( model, maybePostPrediction model.secrets model.modelDetail )
+
 
 
 ---- VIEW ----
@@ -315,11 +357,6 @@ update msg model =
 fontRed : Element.Attr d m
 fontRed =
     rgb255 255 0 0 |> Font.color
-
-
-fontGreen : Element.Attr d m
-fontGreen =
-    rgb255 0 255 0 |> Font.color
 
 
 mkHeaderName : String -> Element msg
@@ -437,6 +474,20 @@ titleBar s =
         [ text s ]
 
 
+submitButton : Msg -> Element Msg
+submitButton msg =
+    Input.button
+        [ Element.centerX
+        , Background.color (rgb255 0 255 255)
+        , Border.solid
+        , Border.color (rgb255 0 0 0)
+        , Border.width 1
+        ]
+        { onPress = Just msg
+        , label = text "Submit"
+        }
+
+
 boldKvPair : String -> String -> List (Element msg)
 boldKvPair s1 s2 =
     [ Element.el
@@ -524,7 +575,7 @@ getErrorElem result rawValue =
 
         -- should be a button, but _soon_
         ( Result.Ok _, _ ) ->
-            row [] [ Element.el [ fontGreen ] (text "Ok!") ]
+            row [] [ Element.el [] (submitButton PredictionSubmit) ]
 
         ( Err errs, _ ) ->
             column [ spacing 3 ] (errs |> List.concatMap makeErr)
@@ -602,18 +653,7 @@ view model =
                                 , label = Input.labelHidden "Token input"
                                 }
                             ]
-                        , row [ width fill ]
-                            [ Input.button
-                                [ Element.centerX
-                                , Background.color (rgb255 0 255 255)
-                                , Border.solid
-                                , Border.color (rgb255 0 0 0)
-                                , Border.width 2
-                                ]
-                                { onPress = Just TokenSubmit
-                                , label = text "Submit"
-                                }
-                            ]
+                        , row [ width fill ] [ submitButton TokenSubmit ]
                         ]
                 ]
             }
