@@ -49,6 +49,12 @@ type alias GranaryToken =
     String
 
 
+type alias Breadcrumb =
+    { url : String
+    , name : String
+    }
+
+
 type alias Model =
     { url : Url.Url
     , key : Nav.Key
@@ -232,12 +238,16 @@ update msg model =
                 maybeModelId =
                     String.dropLeft 1 url.path |> Uuid.fromString
 
-                cmd =
+                cmdM =
                     maybeModelId
                         |> Maybe.map (fetchModel model.secrets)
-                        |> Maybe.withDefault Cmd.none
             in
-            ( model, cmd )
+            case cmdM of
+                Nothing ->
+                    ( { model | modelDetail = Nothing }, fetchModels model.secrets )
+
+                Just cmd ->
+                    ( model, cmd )
 
         Navigation urlRequest ->
             case urlRequest of
@@ -359,6 +369,21 @@ fontRed =
     rgb255 255 0 0 |> Font.color
 
 
+fuschia : Element.Color
+fuschia =
+    rgb255 255 0 255
+
+
+homeCrumb : Breadcrumb
+homeCrumb =
+    Breadcrumb "/" "Home"
+
+
+modelCrumb : GranaryModel -> Breadcrumb
+modelCrumb granaryModel =
+    Breadcrumb ("/" ++ Uuid.toString granaryModel.id) granaryModel.name
+
+
 mkHeaderName : String -> Element msg
 mkHeaderName s =
     el
@@ -391,7 +416,7 @@ newPredictionButton : Uuid.Uuid -> Schema.Schema -> Element Msg
 newPredictionButton modelId modelSchema =
     Input.button
         [ Background.color <| rgb255 0 255 255
-        , Element.focused [ Background.color (rgb255 255 0 255) ]
+        , Element.focused [ Background.color fuschia ]
         ]
         { onPress = Just (NewPrediction modelId modelSchema)
         , label = Element.el [ Font.bold ] (text "New!")
@@ -472,6 +497,23 @@ titleBar s =
         , Font.size 32
         ]
         [ text s ]
+
+
+navBar : List Breadcrumb -> Element Msg
+navBar links =
+    links
+        |> List.map
+            (\crumb ->
+                column [ spacing 3 ]
+                    [ link
+                        []
+                        { url = crumb.url
+                        , label = text crumb.name
+                        }
+                    ]
+            )
+        |> List.intersperse (Element.text " :> ")
+        |> row [ spacing 3, Background.color fuschia, width fill ]
 
 
 submitButton : Msg -> Element Msg
@@ -615,6 +657,7 @@ view model =
                 [ Element.layout [] <|
                     column [ width fill ]
                         [ titleBar detail.model.name
+                        , navBar [ homeCrumb, modelCrumb detail.model ]
                         , row [ height fill, width fill ]
                             [ modelDetailColumn <| granaryModelDetailPairs detail
                             , modelDetailColumn <| predictionsPane detail
@@ -629,6 +672,7 @@ view model =
                 [ Element.layout [] <|
                     column [ width fill ]
                         [ titleBar "Granary"
+                        , navBar [ homeCrumb ]
                         , row
                             [ width fill
                             , height fill
