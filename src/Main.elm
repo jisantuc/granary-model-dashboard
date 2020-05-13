@@ -36,6 +36,13 @@ import Url
 import Uuid as Uuid
 
 
+type alias PaginatedResponse a =
+    { page : Int
+    , limit : Int
+    , results : List a
+    }
+
+
 type alias ModelDetail =
     { predictions : List GranaryPrediction
     , model : GranaryModel
@@ -74,12 +81,21 @@ type alias GranaryModel =
     }
 
 
+type alias StacAsset =
+    { href : String
+    , title : Maybe String
+    , description : Maybe String
+    , roles : List String
+    , mediaType : String
+    }
+
+
 type alias GranaryPrediction =
     { id : Uuid.Uuid
     , modelId : Uuid.Uuid
     , invokedAt : Time.Posix
     , statusReason : Maybe String
-    , outputLocation : Maybe String
+    , results : List StacAsset
     , webhookId : Maybe Uuid.Uuid
     }
 
@@ -109,6 +125,17 @@ decoderGranaryModel =
         (JD.field "jobQueue" JD.string)
 
 
+decoderStacAsset : JD.Decoder StacAsset
+decoderStacAsset =
+    JD.map5
+        StacAsset
+        (JD.field "href" JD.string)
+        (JD.field "title" <| JD.maybe JD.string)
+        (JD.field "description" <| JD.maybe JD.string)
+        (JD.field "roles" <| JD.list JD.string)
+        (JD.field "type" <| JD.string)
+
+
 decoderGranaryPrediction : JD.Decoder GranaryPrediction
 decoderGranaryPrediction =
     JD.map6
@@ -117,8 +144,17 @@ decoderGranaryPrediction =
         (JD.field "modelId" Uuid.decoder)
         (JD.field "invokedAt" JDE.datetime)
         (JD.field "statusReason" <| JD.maybe JD.string)
-        (JD.field "outputLocation" <| JD.maybe JD.string)
+        (JD.field "results" <| JD.list decoderStacAsset)
         (JD.field "webhookId" <| JD.maybe Uuid.decoder)
+
+
+paginatedDecoder : JD.Decoder a -> JD.Decoder (PaginatedResponse a)
+paginatedDecoder ofDecoder =
+    JD.map3
+        PaginatedResponse
+        (JD.field "pageSize" JD.int)
+        (JD.field "page" JD.int)
+        (JD.field "results" <| JD.list ofDecoder)
 
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
@@ -146,12 +182,12 @@ getPredictionCreate detail =
 
 modelUrl : Uuid.Uuid -> String
 modelUrl =
-    (++) "https://granary.rasterfoundry.com/api/models/" << Uuid.toString
+    (++) "http://localhost:8080/api/models/" << Uuid.toString
 
 
 predictionsUrl : Uuid.Uuid -> String
 predictionsUrl =
-    (++) "https://granary.rasterfoundry.com/api/predictions?modelId=" << Uuid.toString
+    (++) "http://localhost:8080/api/predictions?modelId=" << Uuid.toString
 
 
 fetchModels : Maybe GranaryToken -> Cmd.Cmd Msg
@@ -159,8 +195,8 @@ fetchModels token =
     token
         |> Maybe.map
             (\t ->
-                B.get "https://granary.rasterfoundry.com/api/models"
-                    |> B.withExpect (Http.expectJson GotModels (JD.list decoderGranaryModel))
+                B.get "http://localhost:8080/api/models"
+                    |> B.withExpect (Http.expectJson GotModels (paginatedDecoder decoderGranaryModel))
                     |> B.withBearerToken t
                     |> B.request
             )
@@ -188,7 +224,7 @@ fetchPredictions token modelId =
             (\t ->
                 predictionsUrl modelId
                     |> B.get
-                    |> B.withExpect (Http.expectJson GotPredictions (JD.list decoderGranaryPrediction))
+                    |> B.withExpect (Http.expectJson GotPredictions (paginatedDecoder decoderGranaryPrediction))
                     |> B.withBearerToken t
                     |> B.request
             )
@@ -197,7 +233,7 @@ fetchPredictions token modelId =
 
 postPrediction : GranaryToken -> PredictionCreate -> Cmd.Cmd Msg
 postPrediction token predictionCreate =
-    B.post "https://granary.rasterfoundry.com/api/predictions"
+    B.post "http://localhost:8080/api/predictions"
         |> B.withJsonBody (encodePredictionCreate predictionCreate)
         |> B.withBearerToken token
         |> B.withExpect (Http.expectJson CreatedPrediction decoderGranaryPrediction)
@@ -217,9 +253,9 @@ maybePostPrediction tokenM detailM =
 
 
 type Msg
-    = GotModels (Result Http.Error (List GranaryModel))
+    = GotModels (Result Http.Error (PaginatedResponse GranaryModel))
     | GotModel (Result Http.Error GranaryModel)
-    | GotPredictions (Result Http.Error (List GranaryPrediction))
+    | GotPredictions (Result Http.Error (PaginatedResponse GranaryPrediction))
     | NewPrediction Uuid.Uuid Schema.Schema
     | Navigation Browser.UrlRequest
     | UrlChanged Url.Url
@@ -269,7 +305,7 @@ update msg model =
             ( model, Nav.pushUrl model.key "/" )
 
         GotModels (Ok models) ->
-            ( { model | granaryModels = models }, Cmd.none )
+            ( { model | granaryModels = models.results }, Cmd.none )
 
         GotModels (Err _) ->
             ( model, Cmd.none )
@@ -280,7 +316,7 @@ update msg model =
                     model.modelDetail
 
                 updatedModelDetail =
-                    Maybe.map (\rec -> { rec | predictions = predictions }) baseModelDetail
+                    Maybe.map (\rec -> { rec | predictions = predictions.results }) baseModelDetail
             in
             ( { model | modelDetail = updatedModelDetail }, Cmd.none )
 
@@ -463,23 +499,16 @@ predictionsTable detail =
               , width = fill
               , view =
                     \prediction ->
-                        Maybe.map (\_ -> "Failed") prediction.statusReason
-                            |> Maybe.withDefault "Succeeded"
-                            |> text
-              }
-            , { header = mkHeaderName "Results"
-              , width = fill
-              , view =
-                    \prediction ->
-                        Maybe.map
-                            (\uri ->
-                                link []
-                                    { url = uri
-                                    , label = text "Download"
-                                    }
-                            )
-                            prediction.outputLocation
-                            |> Maybe.withDefault (row [] [])
+                        text <|
+                            case ( prediction.statusReason, prediction.results ) of
+                                ( Nothing, [] ) ->
+                                    "In progress"
+
+                                ( Just _, _ ) ->
+                                    "Failed"
+
+                                ( _, _ ) ->
+                                    "Succeeded"
               }
             ]
         }
