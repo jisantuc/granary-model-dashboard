@@ -432,7 +432,7 @@ mkHeaderName s =
             , top = 0
             }
         ]
-        (Element.text s)
+        (text s)
 
 
 mkRowElement : String -> Element msg
