@@ -141,7 +141,7 @@ decoderGranaryExecution =
     JD.map6
         GranaryExecution
         (JD.field "id" Uuid.decoder)
-        (JD.field "modelId" Uuid.decoder)
+        (JD.field "taskId" Uuid.decoder)
         (JD.field "invokedAt" JDE.datetime)
         (JD.field "statusReason" <| JD.maybe JD.string)
         (JD.field "results" <| JD.list decoderStacAsset)
@@ -187,7 +187,7 @@ modelUrl =
 
 executionsUrl : Uuid.Uuid -> String
 executionsUrl =
-    (++) "https://granary.rasterfoundry.com/api/executions?executionId=" << Uuid.toString
+    (++) "https://granary.rasterfoundry.com/api/executions?taskId=" << Uuid.toString
 
 
 fetchModels : Maybe GranaryToken -> Cmd.Cmd Msg
@@ -464,7 +464,7 @@ taskTable model =
     Element.table [ padding 3, spacing 10, Element.alignLeft ]
         { data = model.granaryTasks
         , columns =
-            [ { header = mkHeaderName "Model name"
+            [ { header = mkHeaderName "Task name"
               , width = fill
               , view = \granaryModel -> taskLink granaryModel
               }
