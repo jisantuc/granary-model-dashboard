@@ -43,12 +43,12 @@ type alias PaginatedResponse a =
     }
 
 
-type alias ModelDetail =
-    { predictions : List GranaryPrediction
-    , model : GranaryModel
-    , addingPrediction : Bool
-    , newPrediction : Result (List Validation.Error) JD.Value
-    , newPredictionRaw : String
+type alias TaskDetail =
+    { executions  : List GranaryExecution
+    , task : GranaryTask
+    , addingExecution : Bool
+    , newExecution : Result (List Validation.Error) JD.Value
+    , newExecutionRaw : String
     }
 
 
@@ -65,14 +65,14 @@ type alias Breadcrumb =
 type alias Model =
     { url : Url.Url
     , key : Nav.Key
-    , granaryModels : List GranaryModel
-    , modelDetail : Maybe ModelDetail
+    , granaryTasks : List GranaryTask
+    , taskDetail : Maybe TaskDetail
     , secrets : Maybe GranaryToken
     , secretsUnsubmitted : Maybe GranaryToken
     }
 
 
-type alias GranaryModel =
+type alias GranaryTask =
     { id : Uuid.Uuid
     , name : String
     , validator : Schema.Schema
@@ -90,9 +90,9 @@ type alias StacAsset =
     }
 
 
-type alias GranaryPrediction =
+type alias GranaryExecution =
     { id : Uuid.Uuid
-    , modelId : Uuid.Uuid
+    , taskId : Uuid.Uuid
     , invokedAt : Time.Posix
     , statusReason : Maybe String
     , results : List StacAsset
@@ -100,24 +100,24 @@ type alias GranaryPrediction =
     }
 
 
-type alias PredictionCreate =
-    { modelId : Uuid.Uuid
+type alias ExecutionCreate =
+    { taskId : Uuid.Uuid
     , arguments : JD.Value
     }
 
 
-encodePredictionCreate : PredictionCreate -> JE.Value
-encodePredictionCreate predCreate =
+encodeExecutionCreate : ExecutionCreate -> JE.Value
+encodeExecutionCreate executionCreate =
     JE.object
-        [ ( "modelId", Uuid.encode predCreate.modelId )
-        , ( "arguments", predCreate.arguments )
+        [ ( "taskId", Uuid.encode executionCreate.taskId )
+        , ( "arguments", executionCreate.arguments )
         ]
 
 
-decoderGranaryModel : JD.Decoder GranaryModel
+decoderGranaryModel : JD.Decoder GranaryTask
 decoderGranaryModel =
     JD.map5
-        GranaryModel
+        GranaryTask
         (JD.field "id" Uuid.decoder)
         (JD.field "name" JD.string)
         (JD.field "validator" (JD.field "schema" Schema.decoder))
@@ -136,12 +136,12 @@ decoderStacAsset =
         (JD.field "type" <| JD.string)
 
 
-decoderGranaryPrediction : JD.Decoder GranaryPrediction
-decoderGranaryPrediction =
+decoderGranaryExecution : JD.Decoder GranaryExecution
+decoderGranaryExecution =
     JD.map6
-        GranaryPrediction
+        GranaryExecution
         (JD.field "id" Uuid.decoder)
-        (JD.field "modelId" Uuid.decoder)
+        (JD.field "taskId" Uuid.decoder)
         (JD.field "invokedAt" JDE.datetime)
         (JD.field "statusReason" <| JD.maybe JD.string)
         (JD.field "results" <| JD.list decoderStacAsset)
@@ -161,8 +161,8 @@ init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init _ url key =
     ( { url = url
       , key = key
-      , granaryModels = []
-      , modelDetail = Nothing
+      , granaryTasks = []
+      , taskDetail = Nothing
       , secrets = Nothing
       , secretsUnsubmitted = Nothing
       }
@@ -174,20 +174,20 @@ init _ url key =
 ---- UPDATE ----
 
 
-getPredictionCreate : ModelDetail -> Maybe PredictionCreate
-getPredictionCreate detail =
-    (Result.toMaybe << .newPrediction) detail
-        |> Maybe.map (PredictionCreate detail.model.id)
+getExecutionCreate : TaskDetail -> Maybe ExecutionCreate
+getExecutionCreate detail =
+    (Result.toMaybe << .newExecution) detail
+        |> Maybe.map (ExecutionCreate detail.task.id)
 
 
 modelUrl : Uuid.Uuid -> String
 modelUrl =
-    (++) "http://localhost:8080/api/models/" << Uuid.toString
+    (++) "https://granary.rasterfoundry.com/api/tasks/" << Uuid.toString
 
 
-predictionsUrl : Uuid.Uuid -> String
-predictionsUrl =
-    (++) "http://localhost:8080/api/predictions?modelId=" << Uuid.toString
+executionsUrl : Uuid.Uuid -> String
+executionsUrl =
+    (++) "https://granary.rasterfoundry.com/api/executions?taskId=" << Uuid.toString
 
 
 fetchModels : Maybe GranaryToken -> Cmd.Cmd Msg
@@ -195,8 +195,8 @@ fetchModels token =
     token
         |> Maybe.map
             (\t ->
-                B.get "http://localhost:8080/api/models"
-                    |> B.withExpect (Http.expectJson GotModels (paginatedDecoder decoderGranaryModel))
+                B.get "https://granary.rasterfoundry.com/api/tasks"
+                    |> B.withExpect (Http.expectJson GotTasks (paginatedDecoder decoderGranaryModel))
                     |> B.withBearerToken t
                     |> B.request
             )
@@ -210,42 +210,42 @@ fetchModel token modelId =
             (\t ->
                 modelUrl modelId
                     |> B.get
-                    |> B.withExpect (Http.expectJson GotModel decoderGranaryModel)
+                    |> B.withExpect (Http.expectJson GotTask decoderGranaryModel)
                     |> B.withBearerToken t
                     |> B.request
             )
         |> Maybe.withDefault Cmd.none
 
 
-fetchPredictions : Maybe GranaryToken -> Uuid.Uuid -> Cmd.Cmd Msg
-fetchPredictions token modelId =
+fetchExecutions : Maybe GranaryToken -> Uuid.Uuid -> Cmd.Cmd Msg
+fetchExecutions token modelId =
     token
         |> Maybe.map
             (\t ->
-                predictionsUrl modelId
+                executionsUrl modelId
                     |> B.get
-                    |> B.withExpect (Http.expectJson GotPredictions (paginatedDecoder decoderGranaryPrediction))
+                    |> B.withExpect (Http.expectJson GotExecutions (paginatedDecoder decoderGranaryExecution))
                     |> B.withBearerToken t
                     |> B.request
             )
         |> Maybe.withDefault Cmd.none
 
 
-postPrediction : GranaryToken -> PredictionCreate -> Cmd.Cmd Msg
-postPrediction token predictionCreate =
-    B.post "http://localhost:8080/api/predictions"
-        |> B.withJsonBody (encodePredictionCreate predictionCreate)
+postExecution : GranaryToken -> ExecutionCreate -> Cmd.Cmd Msg
+postExecution token executionCreate =
+    B.post "https://granary.rasterfoundry.com/api/executions"
+        |> B.withJsonBody (encodeExecutionCreate executionCreate)
         |> B.withBearerToken token
-        |> B.withExpect (Http.expectJson CreatedPrediction decoderGranaryPrediction)
+        |> B.withExpect (Http.expectJson CreatedExecution decoderGranaryExecution)
         |> B.request
 
 
-maybePostPrediction : Maybe GranaryToken -> Maybe ModelDetail -> Cmd.Cmd Msg
-maybePostPrediction tokenM detailM =
+maybePostExecution : Maybe GranaryToken -> Maybe TaskDetail -> Cmd.Cmd Msg
+maybePostExecution tokenM detailM =
     case ( tokenM, detailM ) of
         ( Just token, Just detail ) ->
-            getPredictionCreate detail
-                |> Maybe.map (postPrediction token)
+            getExecutionCreate detail
+                |> Maybe.map (postExecution token)
                 |> Maybe.withDefault Cmd.none
 
         _ ->
@@ -253,17 +253,17 @@ maybePostPrediction tokenM detailM =
 
 
 type Msg
-    = GotModels (Result Http.Error (PaginatedResponse GranaryModel))
-    | GotModel (Result Http.Error GranaryModel)
-    | GotPredictions (Result Http.Error (PaginatedResponse GranaryPrediction))
-    | NewPrediction Uuid.Uuid Schema.Schema
+    = GotTasks (Result Http.Error (PaginatedResponse GranaryTask))
+    | GotTask (Result Http.Error GranaryTask)
+    | GotExecutions (Result Http.Error (PaginatedResponse GranaryExecution))
+    | NewExecution Uuid.Uuid Schema.Schema
     | Navigation Browser.UrlRequest
     | UrlChanged Url.Url
-    | PredictionInput String
+    | ExecutionInput String
     | TokenInput String
     | TokenSubmit
-    | PredictionSubmit
-    | CreatedPrediction (Result Http.Error GranaryPrediction)
+    | ExecutionSubmit
+    | CreatedExecution (Result Http.Error GranaryExecution)
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -280,7 +280,7 @@ update msg model =
             in
             case cmdM of
                 Nothing ->
-                    ( { model | modelDetail = Nothing }, fetchModels model.secrets )
+                    ( { model | taskDetail = Nothing }, fetchModels model.secrets )
 
                 Just cmd ->
                     ( model, cmd )
@@ -293,50 +293,50 @@ update msg model =
                 Browser.External href ->
                     ( model, Nav.load href )
 
-        GotModel (Ok granaryModel) ->
+        GotTask (Ok granaryTask) ->
             ( { model
-                | granaryModels = []
-                , modelDetail = Just <| ModelDetail [] granaryModel False (Result.Err []) "{}"
+                | granaryTasks = []
+                , taskDetail = Just <| TaskDetail [] granaryTask False (Result.Err []) "{}"
               }
-            , fetchPredictions model.secrets granaryModel.id
+            , fetchExecutions model.secrets granaryTask.id
             )
 
-        GotModel (Err _) ->
+        GotTask (Err _) ->
             ( model, Nav.pushUrl model.key "/" )
 
-        GotModels (Ok models) ->
-            ( { model | granaryModels = models.results }, Cmd.none )
+        GotTasks (Ok tasks) ->
+            ( { model | granaryTasks = tasks.results }, Cmd.none )
 
-        GotModels (Err _) ->
+        GotTasks (Err _) ->
             ( model, Cmd.none )
 
-        GotPredictions (Ok predictions) ->
+        GotExecutions (Ok executions) ->
             let
-                baseModelDetail =
-                    model.modelDetail
+                baseTaskDetail =
+                    model.taskDetail
 
-                updatedModelDetail =
-                    Maybe.map (\rec -> { rec | predictions = predictions.results }) baseModelDetail
+                updatedTaskDetail =
+                    Maybe.map (\rec -> { rec | executions = executions.results }) baseTaskDetail
             in
-            ( { model | modelDetail = updatedModelDetail }, Cmd.none )
+            ( { model | taskDetail = updatedTaskDetail }, Cmd.none )
 
-        GotPredictions (Err _) ->
+        GotExecutions (Err _) ->
             ( model, Cmd.none )
 
-        NewPrediction _ _ ->
+        NewExecution _ _ ->
             let
-                baseModelDetail =
-                    model.modelDetail
+                baseTaskDetail =
+                    model.taskDetail
 
-                updatedModelDetail =
-                    Maybe.map (\rec -> { rec | addingPrediction = True }) baseModelDetail
+                updatedTaskDetail =
+                    Maybe.map (\rec -> { rec | addingExecution = True }) baseTaskDetail
             in
-            ( { model | modelDetail = updatedModelDetail }, Cmd.none )
+            ( { model | taskDetail = updatedTaskDetail }, Cmd.none )
 
-        PredictionInput s ->
+        ExecutionInput s ->
             let
-                baseModelDetail =
-                    model.modelDetail
+                baseTaskDetail =
+                    model.taskDetail
 
                 valueDecodeResult =
                     JD.decodeString JD.value s
@@ -351,24 +351,24 @@ update msg model =
                                 ]
                             )
 
-                updatedModelDetail =
-                    baseModelDetail
+                updatedTaskDetail =
+                    baseTaskDetail
                         |> Maybe.map
                             (\rec ->
                                 { rec
-                                    | newPredictionRaw = s
-                                    , newPrediction =
+                                    | newExecutionRaw = s
+                                    , newExecution =
                                         valueDecodeResult
                                             |> Result.andThen
                                                 (\value ->
                                                     Schema.validateValue { applyDefaults = True }
                                                         value
-                                                        rec.model.validator
+                                                        rec.task.validator
                                                 )
                                 }
                             )
             in
-            ( { model | modelDetail = updatedModelDetail }, Cmd.none )
+            ( { model | taskDetail = updatedTaskDetail }, Cmd.none )
 
         TokenInput s ->
             ( { model | secretsUnsubmitted = Just s }, Cmd.none )
@@ -378,22 +378,22 @@ update msg model =
             , fetchModels model.secretsUnsubmitted
             )
 
-        CreatedPrediction (Ok _) ->
+        CreatedExecution (Ok _) ->
             ( model
             , Nav.pushUrl model.key
                 ("/"
-                    ++ (model.modelDetail
-                            |> Maybe.map (Uuid.toString << .id << .model)
+                    ++ (model.taskDetail
+                            |> Maybe.map (Uuid.toString << .id << .task)
                             |> Maybe.withDefault ""
                        )
                 )
             )
 
-        CreatedPrediction _ ->
+        CreatedExecution _ ->
             ( model, Cmd.none )
 
-        PredictionSubmit ->
-            ( model, maybePostPrediction model.secrets model.modelDetail )
+        ExecutionSubmit ->
+            ( model, maybePostExecution model.secrets model.taskDetail )
 
 
 
@@ -415,8 +415,8 @@ homeCrumb =
     Breadcrumb "/" "Home"
 
 
-modelCrumb : GranaryModel -> Breadcrumb
-modelCrumb granaryModel =
+taskCrumb : GranaryTask -> Breadcrumb
+taskCrumb granaryModel =
     Breadcrumb ("/" ++ Uuid.toString granaryModel.id) granaryModel.name
 
 
@@ -432,7 +432,7 @@ mkHeaderName s =
             , top = 0
             }
         ]
-        (Element.text s)
+        (text s)
 
 
 mkRowElement : String -> Element msg
@@ -440,33 +440,33 @@ mkRowElement s =
     el [ Font.size 16 ] (text s)
 
 
-modelLink : GranaryModel -> Element msg
-modelLink grModel =
+taskLink : GranaryTask -> Element msg
+taskLink grModel =
     link []
         { url = "/" ++ (grModel.id |> Uuid.toString)
         , label = mkRowElement grModel.name
         }
 
 
-newPredictionButton : Uuid.Uuid -> Schema.Schema -> Element Msg
-newPredictionButton modelId modelSchema =
+newExecutionButton : Uuid.Uuid -> Schema.Schema -> Element Msg
+newExecutionButton modelId modelSchema =
     Input.button
         [ Background.color <| rgb255 0 255 255
         , Element.focused [ Background.color fuschia ]
         ]
-        { onPress = Just (NewPrediction modelId modelSchema)
+        { onPress = Just (NewExecution modelId modelSchema)
         , label = Element.el [ Font.bold ] (text "New!")
         }
 
 
-modelTable : Model -> Element Msg
-modelTable model =
+taskTable : Model -> Element Msg
+taskTable model =
     Element.table [ padding 3, spacing 10, Element.alignLeft ]
-        { data = model.granaryModels
+        { data = model.granaryTasks
         , columns =
-            [ { header = mkHeaderName "Model name"
+            [ { header = mkHeaderName "Task name"
               , width = fill
-              , view = \granaryModel -> modelLink granaryModel
+              , view = \granaryModel -> taskLink granaryModel
               }
             , { header = mkHeaderName "Job Definition"
               , width = fill
@@ -480,27 +480,27 @@ modelTable model =
         }
 
 
-predictionsTable : ModelDetail -> Element msg
-predictionsTable detail =
+executionsTable : TaskDetail -> Element msg
+executionsTable detail =
     Element.table [ padding 3, spacing 10, Element.alignLeft ]
-        { data = detail.predictions
+        { data = detail.executions
         , columns =
             [ { header = mkHeaderName "Invocation time"
               , width = fill
               , view =
-                    \prediction ->
+                    \execution ->
                         let
                             invokedAt =
-                                prediction.invokedAt
+                                execution.invokedAt
                         in
                         text <| Iso8601.fromTime invokedAt
               }
             , { header = mkHeaderName "Status"
               , width = fill
               , view =
-                    \prediction ->
+                    \execution ->
                         text <|
-                            case ( prediction.statusReason, prediction.results ) of
+                            case ( execution.statusReason, execution.results ) of
                                 ( Nothing, [] ) ->
                                     "In progress"
 
@@ -569,13 +569,13 @@ boldKvPair s1 s2 =
     ]
 
 
-modelDetailColumn : List (Element msg) -> Element msg
-modelDetailColumn =
+taskDetailColumn : List (Element msg) -> Element msg
+taskDetailColumn =
     column [ height (fillPortion 2), width fill, Element.alignTop, padding 10, spacing 10 ]
 
 
-granaryModelDetailPairs : ModelDetail -> List (Element msg)
-granaryModelDetailPairs detail =
+granaryTaskDetailPairs : TaskDetail -> List (Element msg)
+granaryTaskDetailPairs detail =
     [ row [ Font.bold ]
         [ Element.el
             [ Border.widthEach
@@ -587,10 +587,10 @@ granaryModelDetailPairs detail =
             ]
             (text "Model Details")
         ]
-    , row [] <| boldKvPair "Name: " detail.model.name
-    , row [] <| boldKvPair "Model ID: " (Uuid.toString detail.model.id)
-    , row [] <| boldKvPair "Job Definition: " detail.model.jobDefinition
-    , row [] <| boldKvPair "Job Queue: " detail.model.jobQueue
+    , row [] <| boldKvPair "Name: " detail.task.name
+    , row [] <| boldKvPair "Task ID: " (Uuid.toString detail.task.id)
+    , row [] <| boldKvPair "Job Definition: " detail.task.jobDefinition
+    , row [] <| boldKvPair "Job Queue: " detail.task.jobQueue
     ]
 
 
@@ -646,50 +646,50 @@ getErrorElem result rawValue =
 
         -- should be a button, but _soon_
         ( Result.Ok _, _ ) ->
-            row [] [ Element.el [] (submitButton PredictionSubmit) ]
+            row [] [ Element.el [] (submitButton ExecutionSubmit) ]
 
         ( Err errs, _ ) ->
             column [ spacing 3 ] (errs |> List.concatMap makeErr)
 
 
-predictionsPane : ModelDetail -> List (Element Msg)
-predictionsPane detail =
-    if detail.addingPrediction then
+executionsPane : TaskDetail -> List (Element Msg)
+executionsPane detail =
+    if detail.addingExecution then
         [ row []
             [ Input.multiline
                 []
-                { onChange = PredictionInput
-                , text = detail.newPredictionRaw
+                { onChange = ExecutionInput
+                , text = detail.newExecutionRaw
                 , placeholder = Input.placeholder [] (text "{}") |> Just
-                , label = Input.labelAbove [] (text "Prediction input")
+                , label = Input.labelAbove [] (text "Execution input")
                 , spellcheck = True
                 }
             ]
-        , getErrorElem detail.newPrediction detail.newPredictionRaw
+        , getErrorElem detail.newExecution detail.newExecutionRaw
         ]
 
     else
         [ row [ Font.bold ]
-            [ text "Predictions: "
-            , newPredictionButton detail.model.id detail.model.validator
+            [ text "Executions: "
+            , newExecutionButton detail.task.id detail.task.validator
             ]
-        , predictionsTable detail
+        , executionsTable detail
         ]
 
 
 view : Model -> Browser.Document Msg
 view model =
-    case ( model.secrets, model.modelDetail ) of
+    case ( model.secrets, model.taskDetail ) of
         ( Just _, Just detail ) ->
-            { title = detail.model.name
+            { title = detail.task.name
             , body =
                 [ Element.layout [] <|
                     column [ width fill ]
-                        [ titleBar detail.model.name
-                        , navBar [ homeCrumb, modelCrumb detail.model ]
+                        [ titleBar detail.task.name
+                        , navBar [ homeCrumb, taskCrumb detail.task ]
                         , row [ height fill, width fill ]
-                            [ modelDetailColumn <| granaryModelDetailPairs detail
-                            , modelDetailColumn <| predictionsPane detail
+                            [ taskDetailColumn <| granaryTaskDetailPairs detail
+                            , taskDetailColumn <| executionsPane detail
                             ]
                         ]
                 ]
@@ -707,7 +707,7 @@ view model =
                             , height fill
                             , padding 10
                             ]
-                            [ modelTable model ]
+                            [ taskTable model ]
                         ]
                 ]
             }
